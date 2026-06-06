@@ -1,0 +1,43 @@
+# Rust / Cargo
+target/
+Cargo.lock
+
+# Tauri
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.db
+
+# Environment
+.env
+.env.local
+
+# Models (downloaded at runtime)
+models/
+*.onnx
+
+# Logs
+*.log
+logs/
+
+# Cortex Gate runtime
+data/
+cortex-gate.db
+cortex-gate.db-journal
+
+# Herdv (multi-agent orchestration)
+.herdv-output/
+.herdv-progress.md
+.pi/research-report.md
+/tmp/herdv-*

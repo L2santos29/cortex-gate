@@ -1,0 +1,52 @@
+project:
+  name: cortex-gate
+  description: >
+    Intelligent AI Gateway with autonomous LLM benchmarking, ONNX embedding-based
+    semantic routing, visual ecualizador with adjustable dimension weights and
+    economy dial, and enterprise cost governance (multi-user, multi-API, token budgets).
+  created: 2026-06-05
+
+tech:
+  language: Rust
+  database: [SQLite]
+  ml: [ONNX Runtime, int8 embeddings]
+  frontend: [Tauri, Tailwind CSS]
+  testing: [unit, integration]
+
+classification:
+  type: Backend API + Desktop App
+  audience: [Commercial, Enterprise]
+  nature: Professional
+  license: PolyForm-Noncommercial-1.0.0
+  components:
+    - benchmark-engine
+    - classifier
+    - gateway
+    - governance
+    - tauri-ui
+
+agents:
+  - role: backend-architect
+    component: benchmark-engine
+    description: Autonomous LLM testing and capability profiling engine
+  - role: data-engineer
+    component: classifier
+    description: ONNX int8 embedding classifier and routing equation
+  - role: backend-architect
+    component: gateway
+    description: OpenAI-compatible API server with multi-provider proxy
+  - role: data-engineer
+    component: governance
+    description: Cost tracking, user quotas, token budgets, automated alerts
+  - role: frontend-developer
+    component: tauri-ui
+    description: Desktop app with ecualizador, dashboard, and config panels
+  - role: software-architect
+    component: integration
+    description: System integration, build system, and release pipeline
+
+infra:
+  git: true
+  gitignore: true
+  cicd: none
+  herdv: true
