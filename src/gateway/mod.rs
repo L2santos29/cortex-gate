@@ -1,24 +1,28 @@
 // Gateway module — HTTP server, routing engine, API endpoints.
 //
-// Provides:
-// - OpenAI-compatible /v1/chat/completions endpoint
-// - Admin API for configuration and monitoring
-// - Request authentication (admin + client tokens)
-// - SSE streaming proxy to upstream providers
-// - Multi-provider support (OpenRouter, Anthropic, OpenAI, etc.)
-
-use axum::Router;
-use crate::governance::Database;
+// Proporciona:
+// - Servidor HTTP con Axum 0.8
+// - Endpoints compatibles con OpenAI Chat Completions API
+// - API de administración para configuración y monitorización
+// - Autenticación de cliente (x-api-key / Bearer)
+// - Autenticación de administrador (X-Admin-Token)
+// - Middleware CORS para integración con cualquier frontend
+// - Multi-provider proxy engine (OpenAI, Anthropic, OpenRouter, Custom)
+// - SSE streaming adapter con backpressure
+//
+// ## Módulos del proxy
+// - [`providers`]  — ProxyEngine con forwarding a upstreams
+// - [`streaming`]  — SSE streaming adapters (OpenAI/OpenRouter/Anthropic)
+//
+// ## Módulos del servidor
+// - [`server`] — Estado compartido, inicialización, router builder
+// - [`auth`]   — Autenticación y autorización
+// - [`routes`] — Handlers de endpoints HTTP
 
 pub mod auth;
-pub mod handlers;
+pub mod providers;
 pub mod routes;
+pub mod server;
 pub mod streaming;
-pub mod middleware;
 
-/// Build the gateway router with all middleware and routes.
-pub fn build_router(db: Database) -> Router {
-    Router::new()
-        // TODO: register routes
-        .with_state(db)
-}
+pub use server::build_router;

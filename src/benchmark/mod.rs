@@ -23,5 +23,13 @@
 
 pub mod engine;
 pub mod profiles;
-pub mod tests;
 pub mod scorer;
+pub mod tests;
+
+// Re-exportaciones principales para uso externo cómodo.
+pub use crate::classifier::dimensions::DimensionType;
+pub use engine::BenchmarkEngine;
+pub use profiles::ModelProfile;
+pub use scorer::ScorerResult;
+pub use scorer::ScorerType;
+pub use tests::BenchmarkTest;

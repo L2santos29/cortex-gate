@@ -1,5 +1,15 @@
 // Cortex Gate — Library root
-// Re-exports modules and provides the application builder.
+//
+// Re-exporta los módulos principales y proporciona el constructor
+// de la aplicación (`create_app`).
+//
+// ## Módulos
+// - `gateway`     — Servidor HTTP, autenticación, rutas
+// - `governance`  — Control de costes, cuotas, base de datos
+// - `classifier`  — Clasificación de prompts por embeddings ONNX
+// - `models`      — Tipos de datos compartidos, configuración
+// - `benchmark`   — Benchmarking autónomo de modelos
+// - `tools`       — Utilidades auxiliares
 
 pub mod benchmark;
 pub mod classifier;
@@ -10,13 +20,23 @@ pub mod tools;
 
 use axum::Router;
 
-/// Build the Cortex Gate application router.
+/// Construye el router de la aplicación Cortex Gate.
+///
+/// Inicializa el estado compartido (config, DB, HTTP client) y
+/// construye el router con todas las rutas y middleware.
+///
+/// ## Ejemplo
+/// ```no_run
+/// use cortex_gate::create_app;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let app = create_app().await;
+///     let listener = tokio::net::TcpListener::bind("127.0.0.1:18801").await.unwrap();
+///     axum::serve(listener, app).await.unwrap();
+/// }
+/// ```
 pub async fn create_app() -> Router {
-    // Initialize SQLite database
-    let db = governance::Database::open_or_create("cortex-gate.db")
-        .await
-        .expect("Failed to initialize database");
-
-    // Build the gateway router with all middleware
-    gateway::build_router(db)
+    let state = gateway::server::init_app_state().await;
+    gateway::server::build_router(state)
 }

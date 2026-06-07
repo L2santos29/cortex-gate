@@ -21,4 +21,10 @@ pub mod alerts;
 pub mod tracking;
 pub mod users;
 
-pub use database::Database;
+// -- Re-exports ------------------------------------------------
+
+pub use database::{Database, DatabaseError};
+pub use users::{ApiKey, User};
+pub use tracking::{TokenTracker, UsagePeriod, UsageSummary, estimate_tokens};
+pub use quotas::{BudgetEnforcer, BudgetPeriod, BudgetConfig, BudgetStatus};
+pub use alerts::{AlertManager, Alert, AlertType, AlertThresholds, Severity};
