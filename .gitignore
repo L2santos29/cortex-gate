@@ -41,3 +41,9 @@ cortex-gate.db-journal
 .herdv-progress.md
 .pi/research-report.md
 /tmp/herdv-*
+
+# Runtime
+cortex-gate.db
+cortex-gate.db-*
+frontend/src-tauri/gen/
+frontend/src-tauri/target/

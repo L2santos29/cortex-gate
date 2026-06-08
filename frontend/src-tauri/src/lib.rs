@@ -7,7 +7,6 @@
 // so the UI remains functional for configuration.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Gateway client
