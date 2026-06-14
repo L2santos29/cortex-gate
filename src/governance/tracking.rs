@@ -179,7 +179,7 @@ impl Database {
         conn.execute(
             "INSERT INTO token_usage (id, user_id, model, provider, tokens_in, tokens_out, cost, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, user_id, model, provider, tokens_in, tokens_out, cost, timestamp],
+            params![id, user_id, model, provider, tokens_in as i64, tokens_out as i64, cost, timestamp],
         )?;
 
         Ok(())

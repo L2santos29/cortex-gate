@@ -247,7 +247,7 @@ impl Database {
                  tokens_per_hour = excluded.tokens_per_hour,
                  tokens_per_day = excluded.tokens_per_day,
                  tokens_per_month = excluded.tokens_per_month",
-            params![id, user_id, tokens_per_hour, tokens_per_day, tokens_per_month],
+            params![id, user_id, tokens_per_hour as i64, tokens_per_day as i64, tokens_per_month as i64],
         )?;
 
         Ok(())
