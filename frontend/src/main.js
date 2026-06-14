@@ -4,6 +4,8 @@
 // ====================================================================
 
 import { invoke } from "@tauri-apps/api/core";
+import { registry } from "./extensions/registry.js";
+import { discoverExtensions } from "./extensions/discovery.js";
 
 // ---- Gateway HTTP fallback ----
 const GATEWAY_BASE = "http://127.0.0.1:18801";
@@ -62,103 +64,7 @@ class ExtensionContext {
   }
 }
 
-// ====================================================================
-// Extension Registry
-// ====================================================================
-
-class ExtensionRegistry {
-  constructor() {
-    this.extensions = new Map();
-    this.pages = new Map();
-    this._builtinPages = [];
-    this.hooks = { beforeCommand: [], afterPageLoad: [] };
-  }
-
-  register(ext, ctx) {
-    this.extensions.set(ext.id, ext);
-    if (!this._contexts) this._contexts = new Map();
-    this._contexts.set(ext.id, ctx);
-    if (ext.pages) {
-      for (const p of ext.pages) {
-        this.pages.set(p.name, { extId: ext.id, ...p });
-      }
-    }
-    if (ext.hooks) {
-      if (ext.hooks.onBeforeCommand)
-        this.hooks.beforeCommand.push(ext.hooks.onBeforeCommand);
-      if (ext.hooks.onAfterPageLoad)
-        this.hooks.afterPageLoad.push(ext.hooks.onAfterPageLoad);
-    }
-    const saved = localStorage.getItem(`cg:ext:${ext.id}`);
-    ext.enabled =
-      saved !== null ? saved === "true" : ext.enabledDefault !== false;
-    if (typeof ext.onInit === "function") {
-      try {
-        ext.onInit(ctx);
-      } catch (e) {
-        console.warn(`Extension "${ext.id}" init error:`, e);
-      }
-    }
-  }
-
-  defineBuiltinPages(pages) {
-    this._builtinPages = pages;
-  }
-
-  get enabledPages() {
-    const result = [];
-    for (const [name, p] of this.pages) {
-      const ext = this.extensions.get(p.extId);
-      if (ext && ext.enabled)
-        result.push({ name, label: p.label, icon: p.icon });
-    }
-    return result;
-  }
-
-  get allPages() {
-    return [...this._builtinPages, ...this.enabledPages];
-  }
-
-  getAllExtensions() {
-    return Array.from(this.extensions.values()).map((e) => ({
-      id: e.id,
-      name: e.name,
-      description: e.description,
-      version: e.version,
-      author: e.author,
-      enabled: e.enabled,
-    }));
-  }
-
-  toggleExtension(id, enabled) {
-    const ext = this.extensions.get(id);
-    if (ext) {
-      ext.enabled = enabled;
-      localStorage.setItem(`cg:ext:${id}`, JSON.stringify(enabled));
-      rebuildNav();
-      if (!enabled) {
-        const current = window.location.hash.replace("#", "") || "extensions";
-        for (const [name, p] of this.pages) {
-          if (p.extId === id && name === current) {
-            navigate("extensions");
-            return;
-          }
-        }
-      }
-    }
-  }
-
-  async loadPageModule(name) {
-    const pageInfo = this.pages.get(name);
-    if (pageInfo) {
-      const ext = this.extensions.get(pageInfo.extId);
-      if (ext && ext.enabled) return await pageInfo.load();
-    }
-    return null;
-  }
-}
-
-const registry = new ExtensionRegistry();
+// ExtensionRegistry lives in ./extensions/registry.js — imported above
 
 // ====================================================================
 // Backend Bridge
@@ -220,7 +126,7 @@ async function runHooks(name, ...args) {
 
 let toastTimer = null;
 
-function showToast(msg, type = "info") {
+export function showToast(msg, type = "info") {
   const toast = document.getElementById("toast");
   const icon = document.getElementById("toast-icon");
   const text = document.getElementById("toast-msg");
@@ -745,30 +651,31 @@ function initServerControl() {
 // ====================================================================
 
 async function init() {
-  // Register built-in pages
-  registry.defineBuiltinPages([
-    { name: "extensions", label: "Extensions", icon: "puzzle" },
-  ]);
+  registry.defineBuiltinPages([{ name: "extensions", label: "Extensions", icon: "puzzle" }]);
 
   // Auto-discover extensions via Vite glob
-  const extModules = import.meta.glob("./extensions/*/manifest.js", { eager: true });
-  for (const [path, mod] of Object.entries(extModules)) {
-    if (mod.manifest) {
-      const extCtx = new ExtensionContext(mod.manifest.id, {
-        showToast,
-        navigate: (name) => { window.location.hash = `#${name}`; },
-      });
-      registry.register(mod.manifest, extCtx);
+  try {
+    const manifests = await discoverExtensions();
+    for (const manifest of manifests) {
+      registry.register(manifest);
     }
+  } catch (e) {
+    console.warn("Extension discovery failed:", e);
   }
 
-  // Build nav
-  rebuildNav();
+  // Also register prompt-router extension (for backward compat)
+  try {
+    const { manifest } = await import("./extensions/prompt-router/manifest.js");
+    if (manifest && !registry.getExtension(manifest.id)) {
+      registry.register(manifest);
+    }
+  } catch (e) {
+    console.warn("Prompt-router extension not found:", e);
+  }
 
-  // Init server control
+  rebuildNav();
   initServerControl();
 
-  // Start router
   const hash = window.location.hash.replace("#", "") || "extensions";
   const validPages = registry.allPages.map((p) => p.name);
   loadPage(validPages.includes(hash) ? hash : "extensions");
