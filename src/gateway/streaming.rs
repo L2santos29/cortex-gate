@@ -101,12 +101,7 @@ async fn run_openai_sse_loop(
             return Err("SSE buffer exceeded max size (1 MB)".into());
         }
 
-        loop {
-            let pos = match buf.find("\n\n") {
-                Some(p) => p,
-                None => break,
-            };
-
+        while let Some(pos) = buf.find("\n\n") {
             let block = buf[..pos].to_string();
             buf = buf[pos + 2..].to_string();
 
@@ -239,12 +234,7 @@ async fn run_anthropic_sse_loop(
             return Err("SSE buffer exceeded max size (1 MB)".into());
         }
 
-        loop {
-            let pos = match buf.find("\n\n") {
-                Some(p) => p,
-                None => break,
-            };
-
+        while let Some(pos) = buf.find("\n\n") {
             let block = buf[..pos].to_string();
             buf = buf[pos + 2..].to_string();
 

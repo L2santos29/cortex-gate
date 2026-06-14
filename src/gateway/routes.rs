@@ -218,7 +218,7 @@ pub async fn admin_config_get(
             if let Some(providers_arr) = providers.as_array_mut() {
                 for provider in providers_arr.iter_mut() {
                     if let Some(p_api_key) = provider.get_mut("api_key") {
-                        if p_api_key.as_str().map_or(false, |s| !s.is_empty()) {
+                        if p_api_key.as_str().is_some_and(|s| !s.is_empty()) {
                             *p_api_key = json!("***REDACTED***");
                         }
                     }

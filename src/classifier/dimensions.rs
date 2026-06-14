@@ -20,8 +20,10 @@ use std::fmt;
 /// Un prompt puede requerir alta precisión matemática pero poca creatividad,
 /// o mucho razonamiento pero poca velocidad, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum DimensionType {
     /// Razonamiento complejo, cadenas de pensamiento largas, lógica formal.
+    #[default]
     Reasoning,
     /// Generación de código, debugging, refactorización.
     Code,
@@ -53,7 +55,10 @@ impl DimensionType {
             DimensionType::Safety,
         ]
     }
+}
 
+
+impl DimensionType {
     /// Etiqueta corta legible para UI/display.
     pub fn label(&self) -> &'static str {
         match self {
@@ -152,12 +157,8 @@ pub struct Ecualizador {
     pub economy: f32,
 }
 
-impl Ecualizador {
-    /// Crea un ecualizador con valores por defecto.
-    ///
-    /// - `economy`: 0.5 (balanceado)
-    /// - Pesos: distribuidos equitativamente entre las 8 dimensiones (0.125 cada una).
-    pub fn default() -> Self {
+impl Default for Ecualizador {
+    fn default() -> Self {
         let dimensions = DimensionType::all()
             .into_iter()
             .map(Dimension::new)
@@ -168,7 +169,9 @@ impl Ecualizador {
             economy: 0.5,
         }
     }
+}
 
+impl Ecualizador {
     /// Ajusta el peso de una dimensión específica.
     ///
     /// El peso se clamp entre 0.0 y 1.0.

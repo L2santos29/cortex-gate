@@ -93,7 +93,7 @@ pub async fn build_router(state: Arc<AppState>, ext_manager: ExtensionManager) -
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/health", get(routes::health))
         .route("/v1/models", get(routes::models))
         .route("/v1/chat/completions", post(routes::chat_completions))

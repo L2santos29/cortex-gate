@@ -247,11 +247,7 @@ fn score_length(expected: &str, response: &str) -> (f32, String) {
     };
 
     let response_words: usize = response.split_whitespace().count();
-    let diff = if response_words > target_words {
-        response_words - target_words
-    } else {
-        target_words - response_words
-    };
+    let diff = response_words.abs_diff(target_words);
 
     let score = (1.0 - diff as f32 / target_words as f32).max(0.0);
 

@@ -8,6 +8,9 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
+/// Shared handler type for event bus listeners.
+pub type EventHandler = Box<dyn Fn(&Value) + Send + Sync>;
+
 /// A handle returned by `EventBus::on()` that unsubscribes when dropped.
 pub struct EventHandle {
     event: String,
@@ -22,7 +25,7 @@ impl Drop for EventHandle {
 }
 
 struct EventBusInner {
-    listeners: RwLock<std::collections::HashMap<String, Vec<(u64, Box<dyn Fn(&Value) + Send + Sync>)>>>,
+    listeners: RwLock<std::collections::HashMap<String, Vec<(u64, EventHandler)>>>,
     next_id: RwLock<u64>,
 }
 
