@@ -1,43 +1,44 @@
 // Cortex Gate — Library root
 //
-// Re-exporta los módulos principales y proporciona el constructor
-// de la aplicación (`create_app`).
-//
-// ## Módulos
-// - `gateway`     — Servidor HTTP, autenticación, rutas
-// - `governance`  — Control de costes, cuotas, base de datos
-// - `classifier`  — Clasificación de prompts por embeddings ONNX
-// - `models`      — Tipos de datos compartidos, configuración
-// - `benchmark`   — Benchmarking autónomo de modelos
-// - `tools`       — Utilidades auxiliares
+// Re-exports main modules and provides the application constructor.
 
 pub mod benchmark;
 pub mod classifier;
+pub mod extensions;
 pub mod gateway;
 pub mod governance;
 pub mod models;
 pub mod tools;
 
-use axum::Router;
+use std::sync::Arc;
 
-/// Construye el router de la aplicación Cortex Gate.
+use axum::Router;
+use extensions::{EventBus, ExtensionContext};
+
+/// Build the Cortex Gate application router.
 ///
-/// Inicializa el estado compartido (config, DB, HTTP client) y
-/// construye el router con todas las rutas y middleware.
-///
-/// ## Ejemplo
-/// ```no_run
-/// use cortex_gate::create_app;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), anyhow::Error> {
-///     let app = create_app().await?;
-///     let listener = tokio::net::TcpListener::bind("127.0.0.1:18801").await?;
-///     axum::serve(listener, app).await?;
-///     Ok(())
-/// }
-/// ```
+/// Initializes shared state, the extension system, and builds the
+/// router with all routes and middleware.
 pub async fn create_app() -> anyhow::Result<Router> {
     let state = gateway::server::init_app_state().await?;
-    Ok(gateway::server::build_router(state))
+
+    // Initialize extension system
+    let event_bus = EventBus::new();
+    let mut ext_manager = extensions::ExtensionManager::new();
+
+    // Register built-in extensions here as they are created
+
+    // Create extension context
+    let ctx = ExtensionContext::new("system", Arc::new(event_bus.clone()))
+        .with_db(state.db.clone())
+        .with_http_client(state.http_client.clone());
+
+    // Initialize all extensions
+    if let Err(errors) = ext_manager.init_all(&ctx).await {
+        for (id, err) in &errors {
+            tracing::error!("Extension '{}' failed to init: {}", id, err);
+        }
+    }
+
+    Ok(gateway::server::build_router(state, ext_manager).await)
 }

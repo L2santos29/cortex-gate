@@ -256,6 +256,98 @@ pub async fn admin_config_post(
 }
 
 // ---------------------------------------------------------------------------
+// Extension management
+// ---------------------------------------------------------------------------
+
+/// `GET /extensions` — List all registered extensions.
+pub async fn extensions_list(
+    State(state): State<Arc<AppState>>,
+) -> Json<Value> {
+    let ext_manager = state.extensions.lock().await;
+    let list: Vec<Value> = ext_manager
+        .list_extensions()
+        .iter()
+        .map(|(manifest, enabled)| {
+            json!({
+                "id": manifest.id,
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "enabled": enabled,
+                "permissions": manifest.permissions,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "extensions": list,
+        "total": ext_manager.len(),
+    }))
+}
+
+/// `POST /extensions/:id/enable` — Enable an extension.
+pub async fn extension_enable(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    // Validate extension exists (sync, drop guard before async)
+    {
+        let ext_manager = state.extensions.lock().await;
+        if ext_manager.get_manifest(&id).is_none() {
+            return Err(ApiError {
+                message: format!("Extension '{}' not found", id),
+                status: StatusCode::NOT_FOUND,
+                error_type: "extension_error".to_string(),
+            });
+        }
+    }
+
+    // Enable asynchronously (locked inside enable() which drops guard before on_enable)
+    match state.extensions.lock().await.enable(&id).await {
+        Ok(()) => Ok(Json(json!({
+            "status": "enabled",
+            "extension": id,
+        }))),
+        Err(e) => Err(ApiError {
+            message: e,
+            status: StatusCode::BAD_REQUEST,
+            error_type: "extension_error".to_string(),
+        }),
+    }
+}
+
+/// `POST /extensions/:id/disable` — Disable an extension.
+pub async fn extension_disable(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    // Validate extension exists (sync, drop guard before async)
+    {
+        let ext_manager = state.extensions.lock().await;
+        if ext_manager.get_manifest(&id).is_none() {
+            return Err(ApiError {
+                message: format!("Extension '{}' not found", id),
+                status: StatusCode::NOT_FOUND,
+                error_type: "extension_error".to_string(),
+            });
+        }
+    }
+
+    // Disable asynchronously
+    match state.extensions.lock().await.disable(&id).await {
+        Ok(()) => Ok(Json(json!({
+            "status": "disabled",
+            "extension": id,
+        }))),
+        Err(e) => Err(ApiError {
+            message: e,
+            status: StatusCode::BAD_REQUEST,
+            error_type: "extension_error".to_string(),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -272,6 +364,7 @@ mod tests {
             classifier: None,
             config: crate::models::config::CortexConfig::default(),
             uptime: Instant::now(),
+            extensions: Arc::new(tokio::sync::Mutex::new(crate::extensions::ExtensionManager::new())),
         })
     }
 

@@ -17,6 +17,52 @@ const ICONS = {
 };
 
 // ====================================================================
+// EventBus — cross-extension pub/sub
+// ====================================================================
+
+class EventBus {
+  constructor() {
+    this._listeners = new Map();
+    this._id = 1;
+  }
+
+  on(event, handler) {
+    const id = this._id++;
+    if (!this._listeners.has(event)) this._listeners.set(event, new Map());
+    this._listeners.get(event).set(id, handler);
+    return () => this._listeners.get(event)?.delete(id);
+  }
+
+  emit(event, data) {
+    this._listeners.get(event)?.forEach((h) => h(data));
+  }
+}
+
+const eventBus = new EventBus();
+
+// ====================================================================
+// Extension Context — provided via init(ctx)
+// ====================================================================
+
+class ExtensionContext {
+  constructor(extId, opts = {}) {
+    this.id = extId;
+    this.eventBus = opts.eventBus || eventBus;
+    this.showToast = opts.showToast || (() => {});
+    this.navigate = opts.navigate || (() => {});
+  }
+
+  getStorage(key) {
+    const raw = localStorage.getItem(`cg:ext:${this.id}:${key}`);
+    return raw ? JSON.parse(raw) : undefined;
+  }
+
+  setStorage(key, value) {
+    localStorage.setItem(`cg:ext:${this.id}:${key}`, JSON.stringify(value));
+  }
+}
+
+// ====================================================================
 // Extension Registry
 // ====================================================================
 
@@ -28,8 +74,10 @@ class ExtensionRegistry {
     this.hooks = { beforeCommand: [], afterPageLoad: [] };
   }
 
-  register(ext) {
+  register(ext, ctx) {
     this.extensions.set(ext.id, ext);
+    if (!this._contexts) this._contexts = new Map();
+    this._contexts.set(ext.id, ctx);
     if (ext.pages) {
       for (const p of ext.pages) {
         this.pages.set(p.name, { extId: ext.id, ...p });
@@ -44,6 +92,13 @@ class ExtensionRegistry {
     const saved = localStorage.getItem(`cg:ext:${ext.id}`);
     ext.enabled =
       saved !== null ? saved === "true" : ext.enabledDefault !== false;
+    if (typeof ext.onInit === "function") {
+      try {
+        ext.onInit(ctx);
+      } catch (e) {
+        console.warn(`Extension "${ext.id}" init error:`, e);
+      }
+    }
   }
 
   defineBuiltinPages(pages) {
@@ -325,7 +380,13 @@ async function loadPage(name) {
     app.innerHTML = `<div class="page-enter">${html}</div>`;
 
     if (typeof init === "function") {
-      requestAnimationFrame(() => init());
+      requestAnimationFrame(() => {
+        // Pass context if page init accepts it (determined by arity)
+        const ctx = registry._contexts?.get(
+          [...(registry.pages?.entries() || [])].find(([_, p]) => p.name === name)?.[1]?.extId
+        );
+        init(ctx);
+      });
     }
 
     // Update active nav button
@@ -689,14 +750,16 @@ async function init() {
     { name: "extensions", label: "Extensions", icon: "puzzle" },
   ]);
 
-  // Load extensions
-  try {
-    const { manifest } = await import(
-      "./extensions/prompt-router/manifest.js"
-    );
-    registry.register(manifest);
-  } catch (e) {
-    console.warn("Failed to load prompt-router extension:", e);
+  // Auto-discover extensions via Vite glob
+  const extModules = import.meta.glob("./extensions/*/manifest.js", { eager: true });
+  for (const [path, mod] of Object.entries(extModules)) {
+    if (mod.manifest) {
+      const extCtx = new ExtensionContext(mod.manifest.id, {
+        showToast,
+        navigate: (name) => { window.location.hash = `#${name}`; },
+      });
+      registry.register(mod.manifest, extCtx);
+    }
   }
 
   // Build nav
