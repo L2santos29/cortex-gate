@@ -9,7 +9,9 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use axum::Router;
+use axum::routing::get_service;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 use crate::gateway::routes;
@@ -127,6 +129,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        // Frontend static files (SPA fallback to index.html)
+        .fallback(get_service(
+            ServeDir::new("frontend/dist")
+                .not_found_service(get_service(
+                    ServeDir::new("frontend/dist").append_index_html_on_directories(true)
+                ))
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(2_000_000))
         .with_state(state)
 }

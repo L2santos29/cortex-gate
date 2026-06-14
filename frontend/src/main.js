@@ -112,10 +112,23 @@ const registry = new ExtensionRegistry();
 async function tauriCmd(cmd, args = {}) {
   await runHooks("beforeCommand", cmd, args);
 
+  // Server control commands are Tauri-only — never fallback to HTTP
+  const SERVER_COMMANDS = ["start_backend", "stop_backend", "get_backend_status", "open_web_ui"];
+  const isServerCmd = SERVER_COMMANDS.includes(cmd);
+
+  // Try Tauri invoke first
   try {
-    if (window.__TAURI_INTERNALS__) return await invoke(cmd, args);
+    if (window.__TAURI_INTERNALS__) {
+      return await invoke(cmd, args);
+    }
   } catch (_) {}
 
+  // Server commands that failed in Tauri context should not fallback to HTTP
+  if (isServerCmd) {
+    throw new Error(`Command "${cmd}" is only available in Tauri desktop mode`);
+  }
+
+  // HTTP fallback for API commands
   const method = cmd.startsWith("get_") ? "GET" : "POST";
   let url = `${GATEWAY_BASE}/api/${cmd.replace(/_/g, "-")}`;
   const opts = { headers: { "Content-Type": "application/json" } };
@@ -573,6 +586,100 @@ function debounce(fn, ms = 300) {
 }
 
 // ====================================================================
+// Server Control (Tauri backend management)
+// ====================================================================
+
+function isTauri() {
+  return typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
+}
+
+let serverPollInterval = null;
+
+async function startServer() {
+  if (!isTauri()) { showToast("Server control only available in desktop app", "info"); return; }
+  try {
+    const result = await invoke("start_backend");
+    showToast(result || "Server started", "success");
+    await updateServerStatus();
+  } catch (err) {
+    showToast(`Error: ${err}`, "error");
+  }
+}
+
+async function stopServer() {
+  if (!isTauri()) { showToast("Server control only available in desktop app", "info"); return; }
+  try {
+    const result = await invoke("stop_backend");
+    showToast(result || "Server stopped", "success");
+    await updateServerStatus();
+  } catch (err) {
+    showToast(`Error: ${err}`, "error");
+  }
+}
+
+async function openWebUI() {
+  const url = "http://127.0.0.1:18801";
+  if (isTauri()) {
+    try {
+      await invoke("open_web_ui");
+      return;
+    } catch (_) {}
+  }
+  window.open(url, "_blank");
+}
+
+async function updateServerStatus() {
+  const dot = document.getElementById("server-dot");
+  const text = document.getElementById("server-status-text");
+  const startBtn = document.getElementById("btn-start-server");
+  const stopBtn = document.getElementById("btn-stop-server");
+  const webBtn = document.getElementById("btn-open-web");
+
+  if (!dot || !text) return;
+
+  // In browser mode: hide Tauri buttons, show info
+  if (!isTauri()) {
+    dot.className = "w-2 h-2 rounded-full bg-cyan-400";
+    text.textContent = "Web Mode";
+    if (startBtn) startBtn.classList.add("hidden");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (webBtn) webBtn.textContent = "Open App";
+    return;
+  }
+
+  // Tauri mode: check backend health
+  try {
+    const healthResp = await fetch("http://127.0.0.1:18801/health", { method: "GET", signal: AbortSignal.timeout(2000) });
+    if (healthResp.ok) {
+      dot.className = "w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/30";
+      text.textContent = "Server Online";
+      if (startBtn) startBtn.classList.add("hidden");
+      if (stopBtn) stopBtn.classList.remove("hidden");
+      return;
+    }
+  } catch (_) {}
+
+  // Server not responding
+  dot.className = "w-2 h-2 rounded-full bg-slate-300";
+  text.textContent = "Server Offline";
+  if (startBtn) startBtn.classList.remove("hidden");
+  if (stopBtn) stopBtn.classList.add("hidden");
+}
+
+function initServerControl() {
+  const startBtn = document.getElementById("btn-start-server");
+  const stopBtn = document.getElementById("btn-stop-server");
+  const webBtn = document.getElementById("btn-open-web");
+
+  if (startBtn) startBtn.addEventListener("click", startServer);
+  if (stopBtn) stopBtn.addEventListener("click", stopServer);
+  if (webBtn) webBtn.addEventListener("click", openWebUI);
+
+  updateServerStatus();
+  serverPollInterval = setInterval(updateServerStatus, 5000);
+}
+
+// ====================================================================
 // Init
 // ====================================================================
 
@@ -594,6 +701,9 @@ async function init() {
 
   // Build nav
   rebuildNav();
+
+  // Init server control
+  initServerControl();
 
   // Start router
   const hash = window.location.hash.replace("#", "") || "extensions";

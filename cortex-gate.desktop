@@ -1,10 +1,10 @@
 [Desktop Entry]
 Name=Cortex Gate
 Comment=Intelligent AI Gateway — Desktop UI
-Exec="/home/l2s/Documents/L&S Agent/agency projects/cortex-gate/launch-ui.sh"
-Icon=cortex-gate
+Exec=/home/l2s/Documents/L&S Agent/agency projects/cortex-gate/frontend/src-tauri/target/release/cortex-gate-tauri
+Icon=/home/l2s/Documents/L&S Agent/agency projects/cortex-gate/frontend/src-tauri/icons/128x128.png
 Terminal=false
 Type=Application
-Categories=Network;
+Categories=Network;Office;
 StartupNotify=true
 StartupWMClass=cortex-gate
