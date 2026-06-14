@@ -10,8 +10,10 @@
 // CORTEX_PORT=18801 CORTEX_API_KEY=sk-my-key cargo run
 // ```
 
+use anyhow::Context;
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), anyhow::Error> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -25,12 +27,14 @@ async fn main() {
         env!("CARGO_PKG_VERSION"),
     );
 
-    let app = cortex_gate::create_app().await;
+    let app = cortex_gate::create_app()
+        .await
+        .context("Failed to create application router")?;
 
     let addr = "127.0.0.1:18801";
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .expect("Failed to bind TCP listener — is port 18801 already in use?");
+        .context("Failed to bind TCP listener — is port 18801 already in use?")?;
 
     tracing::info!(
         target: "cortex_gate::main",
@@ -40,5 +44,7 @@ async fn main() {
 
     axum::serve(listener, app)
         .await
-        .expect("Server exited with error");
+        .context("Server exited with error")?;
+
+    Ok(())
 }

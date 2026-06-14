@@ -1,15 +1,16 @@
 // Cortex Gate — Gateway Server
 //
-// Punto de entrada del servidor HTTP del gateway. Define el estado
-// compartido de la aplicación (`AppState`), la inicialización desde
-// entorno + archivo de configuración, y la construcción del router
-// con todos los middleware (CORS, logging, etc.).
+// Shared application state (`AppState`), initialization from env +
+// config file, and the router builder with middleware stack
+// (CORS, tracing, body limit).
 
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::{Context, Result};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 
 use crate::gateway::routes;
 use crate::governance::Database;
@@ -19,31 +20,21 @@ use crate::models::config::CortexConfig;
 // AppState
 // ---------------------------------------------------------------------------
 
-/// Estado compartido de la aplicación.
+/// Shared application state.
 ///
-///
-/// Se construye una vez en [`init_app_state`] y se inyecta en cada
-/// handler de Axum vía `State<Arc<AppState>>`.
+/// Constructed once in [`init_app_state`] and injected into each Axum handler
+/// via `State<Arc<AppState>>`.
+#[derive(Clone)]
 pub struct AppState {
-    /// Cliente HTTP reutilizable para todas las llamadas a proveedores
-    /// upstream (OpenAI, Anthropic, OpenRouter, etc.).
+    /// Reusable HTTP client for all upstream provider calls.
     pub http_client: reqwest::Client,
-
-    /// Base de datos SQLite para tracking de uso, cuotas, usuarios y
-    /// configuración persistente.
-    pub db: Database,
-
-    /// TODO: Clasificador de embeddings ONNX.
-    ///
-    /// Una vez que el módulo `crate::classifier` esté completo, este
-    /// campo se reemplazará por:
-    ///   `pub classifier: Option<crate::classifier::Classifier>`
+    /// SQLite database for usage tracking, quotas, users, and persistent config.
+    pub db: Arc<Database>,
+    /// ONNX embedding classifier (once implemented).
     pub classifier: Option<()>,
-
-    /// Configuración cargada desde variables de entorno + `config.json`.
+    /// Configuration loaded from env + config.json.
     pub config: CortexConfig,
-
-    /// Instante de creación del estado (para calcular uptime).
+    /// Timestamp on creation (for uptime reporting).
     pub uptime: Instant,
 }
 
@@ -51,16 +42,16 @@ pub struct AppState {
 // Initialization
 // ---------------------------------------------------------------------------
 
-/// Inicializa el estado de la aplicación.
+/// Initialize the application state.
 ///
-/// Orden de carga:
-/// 1. Valores por defecto de [`CortexConfig`]
-/// 2. Archivo `config.json` en el directorio actual
-/// 3. Variables de entorno (precedencia máxima)
+/// Load order:
+/// 1. [`CortexConfig`] defaults
+/// 2. `config.json` in the current directory
+/// 3. Environment variables (highest precedence)
 ///
-/// Luego crea el cliente HTTP, abre la base de datos SQLite, y envuelve
-/// todo en un `Arc` para compartir entre handlers.
-pub async fn init_app_state() -> Arc<AppState> {
+/// Then creates the HTTP client, opens the SQLite database, and wraps
+/// everything in `Arc<AppState>`.
+pub async fn init_app_state() -> Result<Arc<AppState>> {
     let config = CortexConfig::load();
 
     let http_client = reqwest::Client::builder()
@@ -68,7 +59,7 @@ pub async fn init_app_state() -> Arc<AppState> {
         .connect_timeout(std::time::Duration::from_secs(10))
         .user_agent(concat!("cortex-gate/", env!("CARGO_PKG_VERSION")))
         .build()
-        .expect("Failed to build HTTP client");
+        .context("Failed to build HTTP client")?;
 
     tracing::info!(
         target: "cortex_gate::gateway::server",
@@ -76,9 +67,11 @@ pub async fn init_app_state() -> Arc<AppState> {
         config.db_path
     );
 
-    let db = Database::open_or_create(&config.db_path)
-        .await
-        .expect("Failed to initialize database");
+    let db = Arc::new(
+        Database::open_or_create(&config.db_path)
+            .await
+            .context("Failed to initialize database")?,
+    );
 
     tracing::info!(
         target: "cortex_gate::gateway::server",
@@ -86,30 +79,31 @@ pub async fn init_app_state() -> Arc<AppState> {
         config.providers.len(),
     );
 
-    Arc::new(AppState {
+    Ok(Arc::new(AppState {
         http_client,
         db,
-        classifier: None, // TODO: wire up ONNX classifier
+        classifier: None,
         config,
         uptime: Instant::now(),
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Router builder
 // ---------------------------------------------------------------------------
 
-/// Construye el router completo con todas las rutas y middleware.
+/// Build the complete router with all routes and middleware.
 ///
-/// Middleware aplicado (de fuera hacia dentro):
-/// 1. CORS (permite cualquier origen/método/header)
-/// 2. Tracing / logging (cortesía de Axum + tower-http)
+/// Middleware stack (outer → inner):
+/// 1. TraceLayer — request/response logging
+/// 2. CORS — allow any origin/method/header
+/// 3. DefaultBodyLimit — 2 MB max body size
 ///
-/// ## Rutas
-/// | Método | Path                  | Handler               | Auth        |
+/// ## Routes
+/// | Method | Path                  | Handler               | Auth        |
 /// |--------|-----------------------|-----------------------|-------------|
-/// | GET    | `/health`             | `routes::health`      | Ninguna     |
-/// | GET    | `/v1/models`          | `routes::models`      | Ninguna     |
+/// | GET    | `/health`             | `routes::health`      | None        |
+/// | GET    | `/v1/models`          | `routes::models`      | None        |
 /// | POST   | `/v1/chat/completions`| `routes::chat_completions` | API Key |
 /// | GET    | `/admin/config`       | `routes::admin_config_get` | Admin  |
 /// | POST   | `/admin/config`       | `routes::admin_config_post`| Admin  |
@@ -131,7 +125,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::get(routes::admin_config_get)
                 .post(routes::admin_config_post),
         )
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(axum::extract::DefaultBodyLimit::max(2_000_000))
         .with_state(state)
 }
 
@@ -145,21 +141,23 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode};
     use serde_json::json;
-    use tower::ServiceExt; // for oneshot
+    use tower::ServiceExt;
 
-    /// Construye un AppState mínimo para tests unitarios.
+    /// Build a minimal AppState for unit tests.
     async fn test_app_state() -> Arc<AppState> {
         let config = CortexConfig {
-            port: 0,       // no binding in tests
+            port: 0,
             host: "127.0.0.1".to_string(),
             db_path: ":memory:".to_string(),
             ..Default::default()
         };
 
         let http_client = reqwest::Client::new();
-        let db = Database::open_or_create(":memory:")
-            .await
-            .expect("test db");
+        let db = Arc::new(
+            Database::open_or_create(":memory:")
+                .await
+                .expect("test db"),
+        );
 
         Arc::new(AppState {
             http_client,
@@ -256,8 +254,6 @@ mod tests {
         }))
         .unwrap();
 
-        let client_api_key = &client_api_key;
-
         let response = app
             .oneshot(
                 Request::builder()
@@ -336,7 +332,6 @@ mod tests {
             .await
             .unwrap();
 
-        // CORS preflight should include allow-origin
         assert!(response
             .headers()
             .get("access-control-allow-origin")

@@ -51,30 +51,6 @@ impl GatewayClient {
             .map_err(|e| format!("Failed to parse gateway response: {e}"))
     }
 
-    async fn post<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &impl serde::Serialize,
-    ) -> Result<T, String> {
-        let url = format!("{}/api{}", GATEWAY_BASE, path);
-        let resp = self
-            .client
-            .post(&url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| format!("Gateway connection failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Gateway error: {text}"));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| format!("Failed to parse gateway response: {e}"))
-    }
-
     /// POST without expecting a meaningful JSON response body.
     async fn post_void(&self, path: &str, body: &impl serde::Serialize) -> Result<(), String> {
         let url = format!("{}/api{}", GATEWAY_BASE, path);

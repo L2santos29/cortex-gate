@@ -14,7 +14,7 @@
 //! 4. Transform events to OpenAI-compatible format (if needed).
 //! 5. Push events through a [`tokio::sync::mpsc`] channel (buffer 64).
 //! 6. Convert the receiver into a [`futures::stream::Stream`] via `unfold`.
-//! 7. Return `Sse::new(stream)`.
+//! 7. Return `Sse::new(stream)` with keepalive.
 //!
 //! ## Backpressure
 //!
@@ -30,13 +30,18 @@
 //! | OpenRouter | `data: {...}\n\n`         | Passthrough    |
 //! | Anthropic  | Events (content_block_*)  | → OpenAI delta |
 
-use axum::response::sse::{Event, Sse};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use bytes::Bytes;
 use futures::stream::{unfold, Stream, StreamExt};
 use reqwest::Response;
 use serde_json::Value;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
+
+/// Maximum SSE buffer size per stream (1 MB).
+/// Prevents OOM from malicious or misconfigured upstreams.
+const MAX_SSE_BUF_SIZE: usize = 1_000_000;
 
 /// Alias for the SSE stream item type.
 type SseResult = Result<Event, axum::BoxError>;
@@ -49,6 +54,8 @@ type SseResult = Result<Event, axum::BoxError>;
 ///
 /// Parses `data: {...}\n\n` frames and re-emits them. Terminates on
 /// `data: [DONE]\n\n` or connection close.
+///
+/// Includes a 15-second keepalive to prevent proxy timeouts.
 pub fn stream_openai_response(upstream: Response) -> Sse<impl Stream<Item = SseResult>> {
     let (tx, rx) = mpsc::channel::<SseResult>(64);
 
@@ -64,6 +71,11 @@ pub fn stream_openai_response(upstream: Response) -> Sse<impl Stream<Item = SseR
     });
 
     Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text(": keepalive\n"),
+        )
 }
 
 /// Alias for [`stream_openai_response`]; OpenRouter uses the same SSE format.
@@ -83,6 +95,11 @@ async fn run_openai_sse_loop(
     while let Some(chunk) = byte_stream.next().await {
         let chunk: Bytes = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        // SSE buffer overflow guard
+        if buf.len() > MAX_SSE_BUF_SIZE {
+            return Err("SSE buffer exceeded max size (1 MB)".into());
+        }
 
         loop {
             let pos = match buf.find("\n\n") {
@@ -140,6 +157,8 @@ async fn run_openai_sse_loop(
 /// ```text
 /// data: {"choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
 /// ```
+///
+/// Includes a 15-second keepalive.
 pub fn stream_anthropic_response(upstream: Response) -> Sse<impl Stream<Item = SseResult>> {
     let (tx, rx) = mpsc::channel::<SseResult>(64);
 
@@ -155,6 +174,11 @@ pub fn stream_anthropic_response(upstream: Response) -> Sse<impl Stream<Item = S
     });
 
     Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text(": keepalive\n"),
+        )
 }
 
 /// Internal state for Anthropic → OpenAI translation.
@@ -209,6 +233,11 @@ async fn run_anthropic_sse_loop(
     while let Some(chunk) = byte_stream.next().await {
         let chunk: Bytes = chunk?;
         buf.push_str(&String::from_utf8_lossy(&chunk));
+
+        // SSE buffer overflow guard
+        if buf.len() > MAX_SSE_BUF_SIZE {
+            return Err("SSE buffer exceeded max size (1 MB)".into());
+        }
 
         loop {
             let pos = match buf.find("\n\n") {
@@ -373,3 +402,13 @@ async fn run_anthropic_sse_loop(
 // Tests
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_max_sse_buf_size_defined() {
+        assert!(MAX_SSE_BUF_SIZE > 0);
+        assert_eq!(MAX_SSE_BUF_SIZE, 1_000_000);
+    }
+}

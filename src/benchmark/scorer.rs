@@ -284,35 +284,35 @@ mod tests {
 
     #[test]
     fn test_exact_match_pass() {
-        let t = make_test(ScorerType::ExactMatch, "Paris");
+        let _t = make_test(ScorerType::ExactMatch, "Paris");
         let r = score_exact_match("Paris", "Paris");
         assert!((r.0 - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_exact_match_case_insensitive() {
-        let t = make_test(ScorerType::ExactMatch, "Paris");
+        let _t = make_test(ScorerType::ExactMatch, "Paris");
         let r = score_exact_match("Paris", "paris");
         assert!((r.0 - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_exact_match_fail() {
-        let t = make_test(ScorerType::ExactMatch, "Paris");
+        let _t = make_test(ScorerType::ExactMatch, "Paris");
         let r = score_exact_match("Paris", "London");
         assert!((r.0 - 0.0).abs() < 0.001);
     }
 
     #[test]
     fn test_contains_pass() {
-        let t = make_test(ScorerType::Contains, "fibonacci");
+        let _t = make_test(ScorerType::Contains, "fibonacci");
         let r = score_contains("fibonacci", "def fibonacci(n):");
         assert!((r.0 - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_contains_fail() {
-        let t = make_test(ScorerType::Contains, "fibonacci");
+        let _t = make_test(ScorerType::Contains, "fibonacci");
         let r = score_contains("fibonacci", "def factorial(n):");
         assert!((r.0 - 0.0).abs() < 0.001);
     }

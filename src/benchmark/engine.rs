@@ -38,7 +38,7 @@ use crate::models::config::ProviderEntry;
 ///     name: "openai".into(),
 ///     base_url: "https://api.openai.com/v1".into(),
 ///     api_key: Some("sk-...".into()),
-///     provider_type: "openai".into(),
+///     provider_type: ProviderType::OpenAI,
 ///     models: vec!["gpt-4o".into()],
 /// };
 ///
@@ -154,8 +154,8 @@ impl BenchmarkEngine {
     ) -> Result<ScorerResult, String> {
         let start = Instant::now();
 
-        let response_text = match provider.provider_type.as_str() {
-            "anthropic" => {
+        let response_text = match provider.provider_type {
+            crate::models::config::ProviderType::Anthropic => {
                 self.call_anthropic(model_name, &test.prompt, provider)
                     .await?
             }
@@ -385,8 +385,6 @@ fn estimate_cost(model_name: &str, latency_ms: Option<u64>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::benchmark::scorer::ScorerType;
-    use crate::benchmark::tests::default_tests;
 
     #[test]
     fn test_engine_new() {

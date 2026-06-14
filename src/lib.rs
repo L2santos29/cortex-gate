@@ -30,13 +30,14 @@ use axum::Router;
 /// use cortex_gate::create_app;
 ///
 /// #[tokio::main]
-/// async fn main() {
-///     let app = create_app().await;
-///     let listener = tokio::net::TcpListener::bind("127.0.0.1:18801").await.unwrap();
-///     axum::serve(listener, app).await.unwrap();
+/// async fn main() -> Result<(), anyhow::Error> {
+///     let app = create_app().await?;
+///     let listener = tokio::net::TcpListener::bind("127.0.0.1:18801").await?;
+///     axum::serve(listener, app).await?;
+///     Ok(())
 /// }
 /// ```
-pub async fn create_app() -> Router {
-    let state = gateway::server::init_app_state().await;
-    gateway::server::build_router(state)
+pub async fn create_app() -> anyhow::Result<Router> {
+    let state = gateway::server::init_app_state().await?;
+    Ok(gateway::server::build_router(state))
 }

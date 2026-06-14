@@ -325,7 +325,7 @@ impl RoutingEquation {
 
         ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let (best_total, best_quality, best_model) = match ranked.first() {
+        let (_best_total, best_quality, best_model) = match ranked.first() {
             Some((t, q, m)) => (*t, *q, *m),
             None => {
                 return (

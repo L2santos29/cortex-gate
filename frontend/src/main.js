@@ -1,37 +1,128 @@
-// ==========================================================================
-// Cortex Gate — Router principal (SPA ligero) + Tauri invoke wrapper
-// ==========================================================================
+// ====================================================================
+// Cortex Gate — Extensible Platform Shell
+// Extension registry + SPA router + backend bridge
+// ====================================================================
 
 import { invoke } from "@tauri-apps/api/core";
 
-// ---- Gateway HTTP fallback (when not running inside Tauri) ----
+// ---- Gateway HTTP fallback ----
 const GATEWAY_BASE = "http://127.0.0.1:18801";
 
-/**
- * Llama a un comando Tauri. Si no está disponible (dev en navegador),
- * fallback a HTTP directo al gateway.
- */
-export async function tauriCmd(cmd, args = {}) {
-  // Try Tauri invoke first
-  try {
-    if (window.__TAURI_INTERNALS__) {
-      return await invoke(cmd, args);
-    }
-  } catch (_) {
-    // Tauri invoke failed, fall through to HTTP
+// ---- Icon SVGs for nav (simplified paths for leaner bundle) ----
+const ICONS = {
+  puzzle:
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 16.5h-3m0 0a1.5 1.5 0 0 1-1.5-1.5v-3a1.5 1.5 0 0 1 1.5-1.5m0 0V6.75a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 .75.75v3.75m-7.5 0a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5m0 0v3.75a.75.75 0 0 1-.75.75h-6a.75.75 0 0 1-.75-.75v-6a.75.75 0 0 1 .75-.75h.75m7.5 0h.75a.75.75 0 0 1 .75.75v.75"/>',
+  equalizer:
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"/>',
+};
+
+// ====================================================================
+// Extension Registry
+// ====================================================================
+
+class ExtensionRegistry {
+  constructor() {
+    this.extensions = new Map();
+    this.pages = new Map();
+    this._builtinPages = [];
+    this.hooks = { beforeCommand: [], afterPageLoad: [] };
   }
 
-  // Fallback: HTTP call to gateway
+  register(ext) {
+    this.extensions.set(ext.id, ext);
+    if (ext.pages) {
+      for (const p of ext.pages) {
+        this.pages.set(p.name, { extId: ext.id, ...p });
+      }
+    }
+    if (ext.hooks) {
+      if (ext.hooks.onBeforeCommand)
+        this.hooks.beforeCommand.push(ext.hooks.onBeforeCommand);
+      if (ext.hooks.onAfterPageLoad)
+        this.hooks.afterPageLoad.push(ext.hooks.onAfterPageLoad);
+    }
+    const saved = localStorage.getItem(`cg:ext:${ext.id}`);
+    ext.enabled =
+      saved !== null ? saved === "true" : ext.enabledDefault !== false;
+  }
+
+  defineBuiltinPages(pages) {
+    this._builtinPages = pages;
+  }
+
+  get enabledPages() {
+    const result = [];
+    for (const [name, p] of this.pages) {
+      const ext = this.extensions.get(p.extId);
+      if (ext && ext.enabled)
+        result.push({ name, label: p.label, icon: p.icon });
+    }
+    return result;
+  }
+
+  get allPages() {
+    return [...this._builtinPages, ...this.enabledPages];
+  }
+
+  getAllExtensions() {
+    return Array.from(this.extensions.values()).map((e) => ({
+      id: e.id,
+      name: e.name,
+      description: e.description,
+      version: e.version,
+      author: e.author,
+      enabled: e.enabled,
+    }));
+  }
+
+  toggleExtension(id, enabled) {
+    const ext = this.extensions.get(id);
+    if (ext) {
+      ext.enabled = enabled;
+      localStorage.setItem(`cg:ext:${id}`, JSON.stringify(enabled));
+      rebuildNav();
+      if (!enabled) {
+        const current = window.location.hash.replace("#", "") || "extensions";
+        for (const [name, p] of this.pages) {
+          if (p.extId === id && name === current) {
+            navigate("extensions");
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  async loadPageModule(name) {
+    const pageInfo = this.pages.get(name);
+    if (pageInfo) {
+      const ext = this.extensions.get(pageInfo.extId);
+      if (ext && ext.enabled) return await pageInfo.load();
+    }
+    return null;
+  }
+}
+
+const registry = new ExtensionRegistry();
+
+// ====================================================================
+// Backend Bridge
+// ====================================================================
+
+async function tauriCmd(cmd, args = {}) {
+  await runHooks("beforeCommand", cmd, args);
+
+  try {
+    if (window.__TAURI_INTERNALS__) return await invoke(cmd, args);
+  } catch (_) {}
+
   const method = cmd.startsWith("get_") ? "GET" : "POST";
   let url = `${GATEWAY_BASE}/api/${cmd.replace(/_/g, "-")}`;
-
   const opts = { headers: { "Content-Type": "application/json" } };
 
   if (method === "GET" && Object.keys(args).length > 0) {
-    const params = new URLSearchParams(args);
-    url += `?${params}`;
+    url += `?${new URLSearchParams(args)}`;
   }
-
   if (method === "POST") {
     opts.method = "POST";
     opts.body = JSON.stringify(args);
@@ -45,36 +136,47 @@ export async function tauriCmd(cmd, args = {}) {
   return res.json();
 }
 
-// ---- Toast ----
+async function runHooks(name, ...args) {
+  for (const hook of registry.hooks[name] || []) {
+    try {
+      await hook(...args);
+    } catch (e) {
+      console.warn(`Hook ${name} error:`, e);
+    }
+  }
+}
+
+// ====================================================================
+// Toast System
+// ====================================================================
+
 let toastTimer = null;
 
-export function showToast(msg, type = "info") {
+function showToast(msg, type = "info") {
   const toast = document.getElementById("toast");
   const icon = document.getElementById("toast-icon");
   const text = document.getElementById("toast-msg");
   if (!toast || !icon || !text) return;
 
   text.textContent = msg;
-
   icon.className = "w-2 h-2 rounded-full";
-  const colors = {
+  const dotColors = {
     success: "bg-emerald-500",
     error: "bg-red-500",
     info: "bg-cyan-500",
   };
-  icon.classList.add(colors[type] || colors.info);
+  icon.classList.add(dotColors[type] || dotColors.info);
 
-  toast.className =
-    "fixed bottom-6 right-6 px-4 py-3 rounded-xl bg-slate-800/90 backdrop-blur border shadow-2xl text-sm text-slate-300 flex items-center gap-3 transition-all duration-300";
   const borderColors = {
-    success: "border-emerald-700/50",
-    error: "border-red-700/50",
-    info: "border-cyan-700/50",
+    success: "border-emerald-200",
+    error: "border-red-200",
+    info: "border-cyan-200",
   };
+  toast.className =
+    "fixed bottom-6 right-6 px-4 py-3 rounded-xl bg-white border shadow-lg text-sm text-slate-700 flex items-center gap-3 transition-all duration-300";
   toast.classList.add(borderColors[type] || borderColors.info);
 
   toast.classList.remove("pointer-events-none", "translate-y-4", "opacity-0");
-
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     toast.classList.add("translate-y-4", "opacity-0");
@@ -82,27 +184,124 @@ export function showToast(msg, type = "info") {
   }, 3000);
 }
 
-// ---- Router ----
-const PAGES = ["ecualizador", "dashboard", "config"];
+// ====================================================================
+// Modal System
+// ====================================================================
 
-// Track injected style tags so we don't duplicate
+function showModal({ title, fields, onSubmit }) {
+  const backdrop = document.getElementById("modal-backdrop");
+  const box = document.getElementById("modal-box");
+  const content = document.getElementById("modal-content");
+  if (!backdrop || !box || !content) return Promise.resolve(null);
+
+  let html = `<div class="modal-header"><h3 class="text-lg font-semibold text-slate-800">${title}</h3></div>`;
+  html += `<div class="modal-body space-y-3">`;
+
+  const inputs = [];
+  if (fields && fields.length > 0) {
+    fields.forEach((f, i) => {
+      const value = f.value || "";
+      html += `<div>
+        <label class="block text-xs font-medium text-slate-500 mb-1">${f.label}</label>
+        ${
+          f.type === "textarea"
+            ? `<textarea id="modal-field-${i}" class="config-input" rows="2" placeholder="${f.placeholder || ""}">${value}</textarea>`
+            : `<input id="modal-field-${i}" type="${f.type || "text"}" class="config-input" placeholder="${f.placeholder || ""}" value="${value}" />`
+        }
+      </div>`;
+      inputs.push(i);
+    });
+  }
+
+  html += `</div>`;
+  html += `<div class="modal-footer">
+    <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+    <button id="modal-confirm" class="btn btn-primary">${fields?.length ? "Save" : "OK"}</button>
+  </div>`;
+
+  content.innerHTML = html;
+  backdrop.classList.remove("pointer-events-none", "opacity-0");
+  box.classList.remove("scale-95");
+  box.classList.add("scale-100");
+
+  setTimeout(() => document.getElementById("modal-field-0")?.focus(), 100);
+
+  return new Promise((resolve) => {
+    document
+      .getElementById("modal-cancel")
+      .addEventListener("click", () => {
+        hideModal();
+        resolve(null);
+      });
+    document
+      .getElementById("modal-confirm")
+      .addEventListener("click", () => {
+        const values = inputs.map(
+          (i) => document.getElementById(`modal-field-${i}`)?.value || ""
+        );
+        hideModal();
+        resolve(values);
+      });
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) {
+        hideModal();
+        resolve(null);
+      }
+    });
+    document.addEventListener("keydown", function escHandler(e) {
+      if (e.key === "Escape") {
+        hideModal();
+        resolve(null);
+        document.removeEventListener("keydown", escHandler);
+      }
+    });
+  });
+}
+
+function hideModal() {
+  const backdrop = document.getElementById("modal-backdrop");
+  const box = document.getElementById("modal-box");
+  backdrop.classList.add("opacity-0", "pointer-events-none");
+  box.classList.add("scale-95");
+  box.classList.remove("scale-100");
+}
+
+// ====================================================================
+// SPA Router
+// ====================================================================
+
 const injectedStyles = new Set();
-
 let currentPage = null;
+
+function navigate(name) {
+  window.location.hash = `#${name}`;
+}
 
 async function loadPage(name) {
   if (name === currentPage) return;
   currentPage = name;
 
   const app = document.getElementById("app");
-  app.innerHTML = `<div class="flex items-center justify-center py-20"><div class="skeleton w-8 h-8 rounded-full"></div></div>`;
+  app.innerHTML = `<div class="flex items-center justify-center py-20"><div class="skeleton w-10 h-10 rounded-full"></div></div>`;
 
   try {
-    const pageModule = await import(`./pages/${name}.js`);
+    let pageModule = null;
+
+    // 1. Try extension-registered pages
+    pageModule = await registry.loadPageModule(name);
+
+    // 2. Try built-in pages
+    if (!pageModule) {
+      try {
+        pageModule = await import(`./pages/${name}.js`);
+      } catch (_) {}
+    }
+
+    if (!pageModule) throw new Error(`Page "${name}" not found`);
 
     const { html = "", css = "", init } = pageModule;
 
-    // Inject page CSS (once)
+    // Inject page-specific CSS once
     if (css && !injectedStyles.has(name)) {
       const styleEl = document.createElement("style");
       styleEl.textContent = css;
@@ -110,71 +309,73 @@ async function loadPage(name) {
       injectedStyles.add(name);
     }
 
-    // Render
-    app.innerHTML = html;
+    app.innerHTML = `<div class="page-enter">${html}</div>`;
 
-    // Init page
     if (typeof init === "function") {
-      // Small delay to ensure DOM is settled
       requestAnimationFrame(() => init());
     }
 
-    // Update nav active state
+    // Update active nav button
     document.querySelectorAll(".nav-btn").forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.page === name);
     });
+
+    await runHooks("afterPageLoad", name);
   } catch (err) {
     console.error(`Failed to load page "${name}":`, err);
     app.innerHTML = `
-      <div class="flex flex-col items-center justify-center py-20 text-slate-500">
-        <svg class="w-12 h-12 mb-4 text-slate-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+      <div class="flex flex-col items-center justify-center py-20 text-slate-400">
+        <svg class="w-12 h-12 mb-4 text-slate-300" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"/>
         </svg>
-        <p class="text-lg font-medium mb-1">Error al cargar ${name}</p>
-        <p class="text-sm">${err.message}</p>
-        <button onclick="location.reload()" class="btn-secondary mt-6">Recargar</button>
-      </div>
-    `;
+        <p class="text-lg font-medium mb-1 text-slate-500">Error loading ${name}</p>
+        <p class="text-sm text-slate-400">${err.message}</p>
+        <button onclick="location.reload()" class="btn btn-secondary mt-6">Reload</button>
+      </div>`;
   }
 }
 
-// ---- Navigation ----
-document.querySelectorAll(".nav-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const page = btn.dataset.page;
-    if (page && PAGES.includes(page)) {
-      loadPage(page);
-      window.location.hash = `#${page}`;
-    }
-  });
-});
+// ====================================================================
+// Navigation Builder
+// ====================================================================
 
-// ---- Initial load based on hash ----
-function initRouter() {
-  const hash = window.location.hash.replace("#", "") || "ecualizador";
-  const page = PAGES.includes(hash) ? hash : "ecualizador";
-  loadPage(page);
+function rebuildNav() {
+  const nav = document.getElementById("sidebar-nav");
+  if (!nav) return;
+  nav.innerHTML = "";
+
+  for (const page of registry.allPages) {
+    const btn = document.createElement("button");
+    btn.dataset.page = page.name;
+    btn.className =
+      "nav-btn w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-all duration-150";
+    btn.innerHTML = `<svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">${
+      ICONS[page.icon] || ICONS.puzzle
+    }</svg><span>${page.label}</span>`;
+    btn.addEventListener("click", () => navigate(page.name));
+    nav.appendChild(btn);
+  }
+
+  // Highlight current
+  const current = window.location.hash.replace("#", "") || "extensions";
+  nav.querySelector(`[data-page="${current}"]`)?.classList.add("active");
 }
+
+// ====================================================================
+// URL Routing
+// ====================================================================
 
 window.addEventListener("hashchange", () => {
-  const hash = window.location.hash.replace("#", "") || "ecualizador";
-  if (PAGES.includes(hash)) {
-    loadPage(hash);
-  }
+  const hash = window.location.hash.replace("#", "") || "extensions";
+  const validPages = registry.allPages.map((p) => p.name);
+  loadPage(validPages.includes(hash) ? hash : "extensions");
 });
 
-// ---- Boot ----
-document.addEventListener("DOMContentLoaded", initRouter);
+// ====================================================================
+// Shared UI Helpers
+// ====================================================================
 
-// ============================================================
-// Shared UI helpers (used across pages)
-// ============================================================
-
-/**
- * Create a vertical slider control
- * Returns { setValue, getValue, setColor, destroy }
- */
-export function createVerticalSlider(container, opts = {}) {
+function createVerticalSlider(container, opts = {}) {
   const {
     value = 0.5,
     min = 0,
@@ -184,12 +385,15 @@ export function createVerticalSlider(container, opts = {}) {
     onChange = () => {},
   } = opts;
 
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = "position:relative;width:100%;height:100%";
+
   const track = document.createElement("div");
   track.className = "vertical-slider-track";
 
   const fill = document.createElement("div");
   fill.className = "vertical-slider-fill";
-  fill.style.background = color;
+  fill.style.background = `linear-gradient(to top, ${color}, ${color}dd)`;
 
   const thumb = document.createElement("div");
   thumb.className = "vertical-slider-thumb";
@@ -197,7 +401,8 @@ export function createVerticalSlider(container, opts = {}) {
 
   track.appendChild(fill);
   track.appendChild(thumb);
-  container.appendChild(track);
+  wrapper.appendChild(track);
+  container.appendChild(wrapper);
 
   let currentVal = value;
   let dragging = false;
@@ -208,101 +413,87 @@ export function createVerticalSlider(container, opts = {}) {
 
   function setValue(v, fireChange = true) {
     currentVal = clamp(v);
-    if (step > 0) {
-      currentVal = Math.round(currentVal / step) * step;
-    }
+    if (step > 0) currentVal = Math.round(currentVal / step) * step;
     const pct = ((currentVal - min) / (max - min)) * 100;
     fill.style.height = `${pct}%`;
-    thumb.style.bottom = `${pct}%`;
+    thumb.style.bottom = `calc(${pct}% - 9px)`;
     if (fireChange) onChange(currentVal);
   }
 
   function posToValue(e) {
     const rect = track.getBoundingClientRect();
-    const clientY = e.clientY ?? e.touches?.[0]?.clientY ?? 0;
-    const y = clientY - rect.top;
-    const pct = Math.max(0, Math.min(1, 1 - y / rect.height));
-    return min + pct * (max - min);
+    const y =
+      (e.clientY ?? e.touches?.[0]?.clientY ?? 0) - rect.top;
+    return (
+      min +
+      (1 - Math.max(0, Math.min(1, y / rect.height))) * (max - min)
+    );
   }
 
-  function onMouseDown(e) {
+  function onStart(e) {
     dragging = true;
     setValue(posToValue(e));
   }
-  function onMouseMove(e) {
-    if (!dragging) return;
-    setValue(posToValue(e));
+  function onMove(e) {
+    if (dragging) {
+      e.preventDefault();
+      setValue(posToValue(e));
+    }
   }
-  function onMouseUp() {
-    dragging = false;
-  }
-  function onTouchStart(e) {
-    e.preventDefault();
-    dragging = true;
-    setValue(posToValue(e));
-  }
-  function onTouchMove(e) {
-    if (!dragging) return;
-    setValue(posToValue(e));
-  }
-  function onTouchEnd() {
+  function onEnd() {
     dragging = false;
   }
 
-  track.addEventListener("mousedown", onMouseDown);
-  window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("mouseup", onMouseUp);
-  track.addEventListener("touchstart", onTouchStart, { passive: false });
-  window.addEventListener("touchmove", onTouchMove);
-  window.addEventListener("touchend", onTouchEnd);
+  track.addEventListener("mousedown", onStart);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onEnd);
+  track.addEventListener("touchstart", onStart, { passive: false });
+  window.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("touchend", onEnd);
 
   setValue(value, false);
 
   return {
     setValue,
     getValue: () => currentVal,
-    setColor: (c) => {
-      fill.style.background = c;
-      thumb.style.background = c;
-    },
     destroy: () => {
-      track.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      track.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("touchend", onTouchEnd);
+      track.removeEventListener("mousedown", onStart);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      track.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
     },
   };
 }
 
-/**
- * Create a horizontal slider (economy knob)
- */
-export function createHorizontalSlider(container, opts = {}) {
+function createHorizontalSlider(container, opts = {}) {
   const {
     value = 0.5,
     min = 0,
     max = 1,
     step = 0.01,
     color = "#f59e0b",
-    labels = [],
     onChange = () => {},
   } = opts;
+
+  const wrapper = document.createElement("div");
+  wrapper.style.cssText = "position:relative;width:100%;padding:4px 0";
 
   const track = document.createElement("div");
   track.className = "economy-track";
 
   const fill = document.createElement("div");
   fill.className = "economy-fill";
-  fill.style.background = color;
+  fill.style.background = `linear-gradient(to right, #10b981, ${color})`;
 
   const thumb = document.createElement("div");
   thumb.className = "economy-thumb";
 
   track.appendChild(fill);
   track.appendChild(thumb);
-  container.appendChild(track);
+  wrapper.appendChild(track);
+  container.appendChild(wrapper);
 
   let currentVal = value;
   let dragging = false;
@@ -313,9 +504,7 @@ export function createHorizontalSlider(container, opts = {}) {
 
   function setValue(v, fireChange = true) {
     currentVal = clamp(v);
-    if (step > 0) {
-      currentVal = Math.round(currentVal / step) * step;
-    }
+    if (step > 0) currentVal = Math.round(currentVal / step) * step;
     const pct = ((currentVal - min) / (max - min)) * 100;
     fill.style.width = `${pct}%`;
     thumb.style.left = `${pct}%`;
@@ -324,87 +513,105 @@ export function createHorizontalSlider(container, opts = {}) {
 
   function posToValue(e) {
     const rect = track.getBoundingClientRect();
-    const clientX = e.clientX ?? e.touches?.[0]?.clientX ?? 0;
-    const x = clientX - rect.left;
-    const pct = Math.max(0, Math.min(1, x / rect.width));
-    return min + pct * (max - min);
+    const x =
+      (e.clientX ?? e.touches?.[0]?.clientX ?? 0) - rect.left;
+    return (
+      min + Math.max(0, Math.min(1, x / rect.width)) * (max - min)
+    );
   }
 
-  function onMouseDown(e) {
+  function onStart(e) {
     dragging = true;
     setValue(posToValue(e));
   }
-  function onMouseMove(e) {
-    if (!dragging) return;
-    setValue(posToValue(e));
+  function onMove(e) {
+    if (dragging) {
+      e.preventDefault();
+      setValue(posToValue(e));
+    }
   }
-  function onMouseUp() {
-    dragging = false;
-  }
-  function onTouchStart(e) {
-    e.preventDefault();
-    dragging = true;
-    setValue(posToValue(e));
-  }
-  function onTouchMove(e) {
-    if (!dragging) return;
-    setValue(posToValue(e));
-  }
-  function onTouchEnd() {
+  function onEnd() {
     dragging = false;
   }
 
-  track.addEventListener("mousedown", onMouseDown);
-  window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("mouseup", onMouseUp);
-  track.addEventListener("touchstart", onTouchStart, { passive: false });
-  window.addEventListener("touchmove", onTouchMove);
-  window.addEventListener("touchend", onTouchEnd);
+  track.addEventListener("mousedown", onStart);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onEnd);
+  track.addEventListener("touchstart", onStart, { passive: false });
+  window.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("touchend", onEnd);
 
   setValue(value, false);
 
   return {
     setValue,
     getValue: () => currentVal,
-    setColor: (c) => {
-      fill.style.background = c;
-    },
     destroy: () => {
-      track.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      track.removeEventListener("touchstart", onTouchStart);
-      window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("touchend", onTouchEnd);
+      track.removeEventListener("mousedown", onStart);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      track.removeEventListener("touchstart", onStart);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
     },
   };
 }
 
-/**
- * Format numbers compactly (e.g. 1.2M, 3.4K)
- */
-export function formatNum(n) {
+function formatNum(n) {
+  if (!n || isNaN(n)) return "0";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toLocaleString();
 }
 
-/**
- * Format USD cost compactly
- */
-export function formatUSD(n) {
-  if (n >= 1) return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `¢${(n * 100).toFixed(1)}`;
-  return `$${Number(n).toExponential(1)}`;
-}
-
-/**
- * Debounce helper
- */
-export function debounce(fn, ms = 300) {
+function debounce(fn, ms = 300) {
   let timer;
   return (...args) => {
     clearTimeout(timer);
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+// ====================================================================
+// Init
+// ====================================================================
+
+async function init() {
+  // Register built-in pages
+  registry.defineBuiltinPages([
+    { name: "extensions", label: "Extensions", icon: "puzzle" },
+  ]);
+
+  // Load extensions
+  try {
+    const { manifest } = await import(
+      "./extensions/prompt-router/manifest.js"
+    );
+    registry.register(manifest);
+  } catch (e) {
+    console.warn("Failed to load prompt-router extension:", e);
+  }
+
+  // Build nav
+  rebuildNav();
+
+  // Start router
+  const hash = window.location.hash.replace("#", "") || "extensions";
+  const validPages = registry.allPages.map((p) => p.name);
+  loadPage(validPages.includes(hash) ? hash : "extensions");
+}
+
+// Expose public API globally for page modules
+window.__cg = {
+  registry,
+  tauriCmd,
+  showToast,
+  showModal,
+  navigate,
+  createVerticalSlider,
+  createHorizontalSlider,
+  formatNum,
+  debounce,
+};
+
+document.addEventListener("DOMContentLoaded", init);
